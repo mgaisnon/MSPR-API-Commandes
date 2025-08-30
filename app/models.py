@@ -7,5 +7,5 @@ class Order(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     customer_id = Column(String, index=True)
-    orders = Column(JSON)
+    orders = Column(JSON)  # Changé de 'products' à 'orders'
     created_at = Column(DateTime(timezone=True), server_default=func.now())

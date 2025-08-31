@@ -36,6 +36,10 @@ def verify_api_key(x_api_key: str = Header(None)):
     logger.info("Clé API valide")
     return x_api_key
 
+@app.get("/")
+def read_root():
+    return {"message": "Bienvenue dans l'API commandes"}
+
 @app.get("/orders/", response_model=list[schemas.Order])
 def read_orders(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), _ = Depends(verify_api_key)):
     logger.info(f"Requête GET /orders/ reçue avec skip={skip}, limit={limit}")

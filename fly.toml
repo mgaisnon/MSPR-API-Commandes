@@ -1,0 +1,29 @@
+# fly.toml app configuration file generated for mspr-api-commandes on 2025-08-31T13:56:31+02:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'mspr-api-commandes'
+primary_region = 'cdg'
+
+[build]
+
+[http_service]
+  internal_port = 8003
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "2s"
+    method = "GET"
+    path = "/"
+    protocol = "http"
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1

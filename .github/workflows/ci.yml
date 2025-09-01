@@ -48,6 +48,7 @@ env:
   PYTHONPATH: "${{ github.workspace }}"
   DATABASE_URL: "sqlite:///./test.db"
   API_KEY: "secret_key"
+  FLY_API_TOKEN: "fm2_lJPECAAAAAAACfFZxBAS3nWWcbdLGvzdSJYgbOCbwrVodHRwczovL2FwaS5mbHkuaW8vdjGUAJLOABMryx8Lk7lodHRwczovL2FwaS5mbHkuaW8vYWFhL3YxxDzKPld+9Ad7zBPrheJ6dmoKZX7cga3FjtEmOHj7uB/w0d1PWdwWFotzRKzOCvD78mntt5K3a76pXtODeb/ETlhE2pfl/+dZ8Ek30mJY/wuRqdb46tO+zBTo2orlESwNOPBzVkfu3e29PptNzJC3TjM6UQ7s7p26KDhAbfm/KhmUmi/ZkrwWBjp3MU3RX8QgRPmz/h/ZKL4N2ofU0WxITKntm5+wn3BLgySGcu6XSQ0=,fm2_lJPETlhE2pfl/+dZ8Ek30mJY/wuRqdb46tO+zBTo2orlESwNOPBzVkfu3e29PptNzJC3TjM6UQ7s7p26KDhAbfm/KhmUmi/ZkrwWBjp3MU3RX8QQl/cd45J/4WOJqEQXecAKtMO5aHR0cHM6Ly9hcGkuZmx5LmlvL2FhYS92MZYEks5otdJczmi11NIXzgASbNgKkc4AEmzYxCACfpgnnAcw1e+0JSiF4ZvwY6mSjrbrAwkdZTNXTVxjmw==,fo1_LXtRSvXqZXxA2-AGlRSW47qOCXiUZsLaxKrUp-pPnmU"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -132,6 +133,8 @@ jobs:
           pip install ruff==0.7.0 black==24.4.2 mypy==1.10.0 || true
       - name: Ruff (lint)
         run: ruff check .
+      - name: Black (auto-fix)
+        run: black .
       - name: Black (format check)
         run: black --check .
       - name: mypy (type check - optionnel)
@@ -421,88 +424,18 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  deploy:
-    name: 📦 Deploy (retag image + Git tag + PR vers autre repo)
+  deploy-fly:
+    name: 🚀 Deploy to Fly.io
     runs-on: ubuntu-latest
-    needs: [prepare, build-and-push] # build-and-push pousse l'image sur GHCR (main/tags)
-    env:
-      IMAGE_NAME: ${{ needs.prepare.outputs.image_name }}
-      REGISTRY: ghcr.io
-      TARGET_REPO: ${{ inputs.target_repo }}
-      TARGET_BRANCH: ${{ inputs.target_branch }}
-      TARGET_FILE: ${{ inputs.target_file }}
-      IMAGE_FIELD_REGEX: ${{ inputs.image_field_regex }}
-      FORK_OWNER: ${{ inputs.fork_owner }}
-
-    if: ${{ inputs.auto_deploy && github.ref == 'refs/heads/main' }}
+    needs: [lint, unit-tests, integration-tests, build-image, security-scan]
+    if: github.ref == 'refs/heads/main'
     steps:
-      - name: Checkout (repo courant)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # on veut l’historique pour trouver le dernier tag
+      - uses: actions/checkout@v4
 
-      # 1) Calculer le prochain tag semver (patch) à partir du dernier tag v* (ou v0.0.0 si aucun)
-      - name: Compute next semver tag (patch)
-        id: ver
-        shell: bash
-        run: |
-          set -euo pipefail
-          LAST_TAG="$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || echo 'v0.0.0')"
-          MAJOR="$(echo "$LAST_TAG" | cut -d. -f1 | tr -d 'v')"
-          MINOR="$(echo "$LAST_TAG" | cut -d. -f2)"
-          PATCH="$(echo "$LAST_TAG" | cut -d. -f3)"
-          NEXT_TAG="v${MAJOR}.${MINOR}.$((PATCH+1))"
-          echo "last=$LAST_TAG"  >> $GITHUB_OUTPUT
-          echo "next=$NEXT_TAG"  >> $GITHUB_OUTPUT
-          echo "Next tag: $NEXT_TAG (last=$LAST_TAG)"
+      - name: Setup Flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
 
-      # 2) Retag de l'image GHCR existante :sha-<short> => :vX.Y.Z et push
-      - name: Docker login GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Pull image built by CI (sha tag)
-        run: |
-          SHORT="${GITHUB_SHA::7}"
-          docker pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${SHORT}"
-
-      - name: Retag & push versioned image
-        run: |
-          NEXT="${{ steps.ver.outputs.next }}"
-          SRC="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${GITHUB_SHA::7}"
-          DST="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${NEXT}"
-          docker tag "$SRC" "$DST"
-          docker push "$DST"
-          echo "Pushed $DST"
-
-      # 3) Créer un tag Git vX.Y.Z dans CE repo et le pousser
-      - name: Create & push Git tag
+      - name: Deploy to Fly.io
+        run: flyctl deploy --remote-only
         env:
-          NEXT: ${{ steps.ver.outputs.next }}
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$NEXT" -m "Release $NEXT"
-          git push origin "$NEXT"
-
-      - name: 🔔 Trigger remote deploy (repository_dispatch)
-        if: ${{ github.ref == 'refs/heads/main' }}
-        env:
-          GH_TOKEN: ${{ github.token }}  
-          IMAGE: ${{ env.REGISTRY }}/${{ needs.prepare.outputs.image_name }}:${{ steps.ver.outputs.next }}
-        run: |
-          set -euo pipefail
-          echo "Dispatching deploy_image to ${{ inputs.target_repo }} with $IMAGE"
-
-          gh api repos/${{ inputs.target_repo }}/dispatches \
-            -f event_type='deploy_image' \
-            -f client_payload="$(jq -nc \
-              --arg image   "$IMAGE" \
-              --arg actor   "${{ github.actor }}" \
-              --arg sha     "${{ github.sha }}" \
-              --arg repo    "${{ github.repository }}" \
-              --arg run_url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-              '{image:$image, actor:$actor, sha:$sha, repo:$repo, run_url:$run_url}')"
+          FLY_API_TOKEN: ${{ env.FLY_API_TOKEN }}
